@@ -17,7 +17,7 @@ from flask import Flask, request, session, url_for, redirect, \
      render_template, abort, g, flash, _app_ctx_stack
 from werkzeug import check_password_hash, generate_password_hash
 import MySQLdb
-
+from MySQLdb.cursors import DictCursor
 db = MySQLdb.connect(host="minitwitdb.ckqykakd7kf7.us-west-2.rds.amazonaws.com", user="weaverm1",passwd="Coswin17!", db="miniTwitDB",port=5000)
 cur = db.cursor()
 print("sanity cheq")
@@ -39,11 +39,11 @@ def get_db():
     """
     top = _app_ctx_stack.top 
     if not hasattr(top, 'miniTwitDB'):
-        top.mysql_db = MySQLdb.connect(host="minitwitdb.ckqykakd7kf7.us-west-2.rds.amazonaws.com", user="weaverm1",passwd="Coswin17!", db="miniTwitDB",port=5000)
+        top.miniTwitDB = MySQLdb.connect(host="minitwitdb.ckqykakd7kf7.us-west-2.rds.amazonaws.com", user="weaverm1",passwd="Coswin17!", db="miniTwitDB",port=5000)
    # for row in cur.fetchall():
     #    print row[0]    
    # top.mysql_db.row_factory = MySQLdb.Row
-    return top.mysql_db.cursor()
+    return top.miniTwitDB
 
 
 @app.teardown_appcontext
@@ -71,11 +71,7 @@ def initdb_command():
 
 def query_db(query, args=(), one=False):
     """Queries the database and returns a list of dictionaries."""
-    print(query)
-    print("ARGS:")
-    for i in args:
-        print(i)
-    cur = get_db()
+    cur = get_db().cursor(MySQLdb.cursors.DictCursor)
     num  = cur.execute(query, args)
     rv = cur.fetchall()
     return (rv[0] if rv else None) if one else rv
@@ -85,7 +81,7 @@ def get_user_id(username):
     """Convenience method to look up the id for a username."""
     rv = query_db("SELECT user_id FROM user WHERE username =%s",
                   (username,), one=True)
-    return rv[0] if rv else None
+    return rv['user_id'] if rv else None
 
 
 def format_datetime(timestamp):
@@ -95,7 +91,9 @@ def format_datetime(timestamp):
 
 def gravatar_url(email, size=80):
     """Return the gravatar image for the given email address."""
-    return 'https://www.gravatar.com/avatar/%s%sd=identicon&s=%d' % \
+    print(email)
+    print("EMAIL DEBUG")
+    return 'https://www.gravatar.com/avatar/%s?d=identicon&s=%d' % \
         (md5(email.strip().lower().encode('utf-8')).hexdigest(), size)
 
 
@@ -139,8 +137,6 @@ def public_timeline():
 @app.route('/<username>')
 def user_timeline(username):
     """Display's a users tweets."""
-    print(username)
-    print("is USERNAME")
     profile_user = query_db("SELECT * FROM user WHERE username = %s",
                             (username,), one=True)
     if profile_user is None:
@@ -168,7 +164,8 @@ def follow_user(username):
     if whom_id is None:
         abort(404)
     db = get_db()
-    db.execute('INSERT INTO follower (who_id, whom_id) VALUES (%s, %s)',
+    cur = db.cursor()
+    cur.execute('INSERT INTO follower (who_id, whom_id) VALUES (%s, %s)',
               ([session['user_id'], whom_id]))
     db.commit()
     flash('You are now following "%s"' % username)
@@ -184,7 +181,8 @@ def unfollow_user(username):
     if whom_id is None:
         abort(404)
     db = get_db()
-    db.execute('DELETE FROM follower WHERE who_id=%s AND whom_id=%s',
+    cur = db.cursor()
+    cur.execute('DELETE FROM follower WHERE who_id=%s AND whom_id=%s',
               ([session['user_id'], whom_id]))
     db.commit()
     flash('You are no longer following "%s"' % username)
@@ -198,7 +196,8 @@ def add_message():
         abort(401)
     if request.form['text']:
         db = get_db()
-        db.execute('''INSERT INTO message (author_id, text, pub_date)
+        cur = db.cursor()
+        cur.execute('''INSERT INTO message (author_id, text, pub_date)
           VALUES (%s, %s, %s)''', ((session['user_id'], request.form['text'],
                                 int(time.time()))))
         db.commit()
@@ -248,12 +247,13 @@ def register():
         elif get_user_id(request.form['username']) is not None:
             error = 'The username is already taken'
         else:
-            cur = get_db()
+            conn = get_db()
+	    cur = conn.cursor()
             cur.execute('''INSERT INTO user (
               username, email, pw_hash) VALUES (%s, %s, %s)''',
               ([request.form['username'], request.form['email'],
                generate_password_hash(request.form['password'])]))
-            db.commit()
+            conn.commit()
             flash('You were successfully registered and can login now')
             return redirect(url_for('login'))
     return render_template('register.html', error=error)
